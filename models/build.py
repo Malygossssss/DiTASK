@@ -7,14 +7,6 @@
 
 from .swin_transformer_ditask import SwinTransformerDiTASK
 from .swin_transformer import SwinTransformer
-from .swin_mtl import MultiTaskSwin
-from .vision_transformer import VisionTransformer
-from .vision_transformer_ditask import VisionTransformerDiTASK
-from .clip_mtl import MultiTaskCLIP
-# from .pvt import PyramidVisionTransformer, pvt_tiny
-from .pvt_ditask import PyramidVisionTransformerMTL, pvt_small_mtl
-from .pvt_mtl import MultiTaskPVT
-from .pvt_v2 import PyramidVisionTransformerV2, pvt_v2_b2, pvt_v2_b5
 import timm
 
 
@@ -76,6 +68,14 @@ def build_model(config, is_pretrain=False):
                                     fused_window_process=config.FUSED_WINDOW_PROCESS)
     
     elif model_type == "vit":
+        try:
+            from .vision_transformer import VisionTransformer
+            from .vision_transformer_ditask import VisionTransformerDiTASK
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "MODEL.TYPE='vit' requires vision transformer modules, but they are missing in this checkout."
+            ) from e
+            
         if config.MODEL.DITASK.ENABLED:
             model = VisionTransformerDiTASK(
                 img_size=config.DATA.IMG_SIZE,
@@ -126,9 +126,27 @@ def build_model(config, is_pretrain=False):
 
 def build_mtl_model(backbone, config):
     if config.MODEL.TYPE == "swin":
+        try:
+            from .swin_mtl import MultiTaskSwin
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "MODEL.TYPE='swin' requires swin_mtl module, but it is missing in this checkout."
+            ) from e
         model = MultiTaskSwin(backbone, config)
     elif config.MODEL.TYPE == "vit":
+        try:
+            from .clip_mtl import MultiTaskCLIP
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "MODEL.TYPE='vit' requires clip_mtl module, but it is missing in this checkout."
+            ) from e
         model = MultiTaskCLIP(backbone, config)
     elif config.MODEL.TYPE == "pvt":
+        try:
+            from .pvt_mtl import MultiTaskPVT
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "MODEL.TYPE='pvt' requires pvt_mtl module, but it is missing in this checkout."
+            ) from e
         model = MultiTaskPVT(backbone, config)
     return model

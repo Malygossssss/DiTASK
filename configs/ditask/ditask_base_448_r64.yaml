@@ -3,7 +3,7 @@ DATA:
 MODEL:
   TYPE: swin
   NAME: ditask_base_448_r64
-  DROP_PATH_RATE: 0.2
+  DROP_PATH_RATE: 0.3
   SWIN:
     EMBED_DIM: 128
     DEPTHS: [2, 2, 18, 2]

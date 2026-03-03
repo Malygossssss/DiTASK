@@ -144,3 +144,7 @@ output/
 *.ptl
 *.dec
 wandb/*
+
+/output
+/PASCAL_MT
+/backbone

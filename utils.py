@@ -18,7 +18,6 @@ import imageio
 import scipy.io as sio
 import torch.nn.functional as F
 from models.lora import map_old_state_dict_weights
-from models.vision_transformer_ditask import _convert_openai_clip, _load_weights
 
 
 def mkdir_if_missing(directory):
