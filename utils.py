@@ -181,7 +181,11 @@ def load_checkpoint(config, model, optimizer, lr_scheduler, loss_scaler, logger,
             print("No keys needs to be mapped for LoRA")
         model_state = map_old_state_dict_weights(
             model_state, mapping, "", config.MODEL.DITASK.SPLIT_QKV)
-    missing, unexpected = model.load_state_dict(model_state, strict=False, assign=False)
+    try:
+        missing, unexpected = model.load_state_dict(model_state, strict=False, assign=False)
+    except TypeError:
+        # `assign` is only supported in newer PyTorch versions.
+        missing, unexpected = model.load_state_dict(model_state, strict=False)
     if not quiet:
         if len(missing) > 0:
             logger.warning("=============Missing Keys==============")
