@@ -8,6 +8,7 @@ from PIL import Image
 
 from data.mtl_ds import NYUD_MT
 from evaluation.eval_depth import eval_depth_predictions
+from logger import bind_eval_logger, create_logger
 
 
 def _prepare_minimal_nyud_root(root: Path):
@@ -62,6 +63,34 @@ class NyudDepthTest(unittest.TestCase):
 
             self.assertAlmostEqual(results["rmse"], 0.0, places=6)
             self.assertAlmostEqual(results["log_rmse"], 0.0, places=6)
+
+    def test_eval_depth_predictions_logs_to_bound_run_logger(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            root = tmp_path / "NYUD_MT"
+            save_dir = tmp_path / "predictions"
+            depth_pred_dir = save_dir / "depth"
+
+            _prepare_minimal_nyud_root(root)
+            depth_pred_dir.mkdir(parents=True, exist_ok=True)
+            sio.savemat(depth_pred_dir / "00001.mat", {"depth": np.ones((2, 2), dtype=np.float32)})
+
+            run_logger = create_logger(
+                output_dir=str(tmp_path),
+                dist_rank=0,
+                name=f"depth_eval_{id(self)}",
+            )
+            bind_eval_logger(run_logger)
+            self.addCleanup(bind_eval_logger, None)
+
+            eval_depth_predictions("NYUD", str(save_dir), gt_root=str(root))
+
+            for handler in run_logger.handlers:
+                handler.flush()
+
+            log_text = (tmp_path / "log_rank0.txt").read_text(encoding="utf-8")
+            self.assertIn("Evaluate the saved images (depth)", log_text)
+            self.assertIn("Results for Depth Estimation", log_text)
 
 
 if __name__ == "__main__":

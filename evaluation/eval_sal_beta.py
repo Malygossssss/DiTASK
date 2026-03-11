@@ -10,6 +10,7 @@ import torch
 from torch import nn
 
 import evaluation.jaccard as evaluation
+from logger import get_eval_logger
 
 
 class SaliencyMeterWithBeta(object):
@@ -82,6 +83,7 @@ class SaliencyMeterWithBeta(object):
 
         eval_result = {'maxF': fscore.max().item()}
         if verbose:
-            print('Results for Saliency Estimation')
-            print('maxF: {:.3f}'.format(100.0 * eval_result['maxF']))
+            eval_logger = get_eval_logger()
+            eval_logger.info('Results for Saliency Estimation')
+            eval_logger.info('maxF: {:.3f}'.format(100.0 * eval_result['maxF']))
         return eval_result

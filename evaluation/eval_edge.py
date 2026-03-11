@@ -3,15 +3,13 @@
 # Licensed under the CC BY-NC 4.0 license (https://creativecommons.org/licenses/by-nc/4.0/)
 
 import json
-import logging
 import os
 
 import torch
 
 from evaluation.edge_metrics import evaluate_edge_directory, write_pr_csv
+from logger import get_eval_logger
 from mtl_loss_schemes import BalancedCrossEntropyLoss
-
-eval_logger = logging.getLogger('eval')
 
 
 class EdgeMeter(object):
@@ -46,6 +44,7 @@ class EdgeMeter(object):
                     eval_dict[key] = self.formal_results[key]
 
         if verbose:
+            eval_logger = get_eval_logger()
             eval_logger.info("\nEdge Detection Evaluation")
             eval_logger.info("loss: %.6f" % eval_dict["loss"])
             if "odsF" in eval_dict:
@@ -57,6 +56,7 @@ class EdgeMeter(object):
 
 
 def eval_edge_predictions(database, save_dir, gt_root=None, overfit=False, write_outputs=True):
+    eval_logger = get_eval_logger()
     del overfit
     if database != "NYUD":
         raise NotImplementedError("formal edge evaluation is only implemented for NYUD")

@@ -28,7 +28,7 @@ from models import build_model, build_mtl_model
 from data import build_loader
 from lr_scheduler import build_scheduler
 from optimizer import build_optimizer
-from logger import create_logger
+from logger import bind_eval_logger, create_logger
 from utils import load_checkpoint, load_pretrained, save_checkpoint, NativeScalerWithGradNormCount, auto_resume_helper
 
 from mtl_loss_schemes import MultiTaskLoss, get_loss
@@ -433,7 +433,7 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 f'mem {memory_used:.0f}MB')
 
     if config.EVAL_TRAINING is not None and (epoch % config.EVAL_TRAINING == 0):
-        print("Training Eval:")
+        logger.info("Training Eval:")
         performance_meter.update(
             {t: get_output(outputs[t], t) for t in config.TASKS}, targets)
 
@@ -444,20 +444,20 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
             }
             if 'semseg' in scores:
                 scores_logs["train/tasks/semseg/mIoU"] = scores['semseg']['mIoU']
-            if 'normals' in loss_dict:
+            if 'normals' in scores:
                 scores_logs["train/tasks/normals/mean"] = scores['normals']['mean']
                 scores_logs["train/tasks/normals/rmse"] = scores['normals']['rmse']
                 scores_logs["train/tasks/normals/mean_v2"] = scores['normals']['mean_v2']
                 scores_logs["train/tasks/normals/rmse_v2"] = scores['normals']['rmse_v2']
-            if 'human_parts' in loss_dict:
+            if 'human_parts' in scores:
                 scores_logs["train/tasks/human_parts/mIoU"] = scores['human_parts']['mIoU']
-            if 'sal' in loss_dict:
+            if 'sal' in scores:
                 scores_logs["train/tasks/sal/maxF"] = scores['sal']['maxF']
                 scores_logs["train/tasks/sal/Beta maxF"] = scores['sal']['Beta maxF']
                 scores_logs["train/tasks/sal/mIoU"] = scores['sal']['mIoU']
-            if 'edge' in loss_dict:
+            if 'edge' in scores:
                 scores_logs["train/tasks/edge/loss"] = scores['edge']['loss']
-            if 'depth' in loss_dict:
+            if 'depth' in scores:
                 scores_logs["train/tasks/depth/rmse"] = scores['depth']['rmse']
                 scores_logs["train/tasks/depth/log_rmse"] = scores['depth']['log_rmse']
 
@@ -661,6 +661,7 @@ if __name__ == '__main__':
     os.makedirs(output_dir, exist_ok=True)
     logger = create_logger(output_dir=output_dir,
                            dist_rank=dist.get_rank(), name=f"{config.MODEL.NAME}")
+    bind_eval_logger(logger)
 
     if dist.get_rank() == 0:
         path = os.path.join(output_dir, "config.json")

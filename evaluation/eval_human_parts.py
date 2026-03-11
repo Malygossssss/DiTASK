@@ -14,14 +14,14 @@ import os.path
 import numpy as np
 import torch
 from PIL import Image
-import logging
 
-eval_logger = logging.getLogger('eval')
+from logger import get_eval_logger
 
 PART_CATEGORY_NAMES = ['background', 'head', 'torso', 'uarm', 'larm', 'uleg', 'lleg']
 
 
 def eval_human_parts(loader, folder, n_parts=6):
+    eval_logger = get_eval_logger()
 
     tp = [0] * (n_parts + 1)
     fp = [0] * (n_parts + 1)
@@ -114,19 +114,22 @@ class HumanPartsMeter(object):
         eval_result['jaccards_all_categs'] = jac
         eval_result['mIoU'] = np.mean(jac)
 
-        eval_logger.info('\nHuman Parts mIoU: {0:.4f}\n'.format(100 * eval_result['mIoU']))
-        class_IoU = jac
-        for i in range(len(class_IoU)):
-            spaces = ''
-            for j in range(0, 15 - len(self.cat_names[i])):
-                spaces += ' '
-            eval_logger.info('{0:s}{1:s}{2:.4f}'.format(self.cat_names[i], spaces, 100 * class_IoU[i]))
+        if verbose:
+            eval_logger = get_eval_logger()
+            eval_logger.info('\nHuman Parts mIoU: {0:.4f}\n'.format(100 * eval_result['mIoU']))
+            class_IoU = jac
+            for i in range(len(class_IoU)):
+                spaces = ''
+                for j in range(0, 15 - len(self.cat_names[i])):
+                    spaces += ' '
+                eval_logger.info('{0:s}{1:s}{2:.4f}'.format(self.cat_names[i], spaces, 100 * class_IoU[i]))
 
         return eval_result
 
 
 def eval_human_parts_predictions(database, save_dir, gt_root=None, overfit=False):
     """ Evaluate the human parts predictions that are stored in the save dir """
+    eval_logger = get_eval_logger()
 
     # Dataloaders
     if database == 'PASCALContext':

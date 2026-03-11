@@ -8,6 +8,8 @@
 
 import torch
 
+from logger import get_eval_logger
+
 
 def normalize_tensor(input_tensor, dim):
     norm = torch.norm(input_tensor, p='fro', dim=dim, keepdim=True)
@@ -45,8 +47,9 @@ class NormalsMeterV2(object):
         eval_result['rmse'] = self.sum_deg_diff / self.total
 
         if verbose:
-            print('Results for Surface Normal Estimation')
-            print('mean: {:.3f}'.format(eval_result['mean']))
-            print('rmse: {:.3f}'.format(eval_result['rmse']))
+            eval_logger = get_eval_logger()
+            eval_logger.info('Results for Surface Normal Estimation')
+            eval_logger.info('mean: {:.3f}'.format(eval_result['mean']))
+            eval_logger.info('rmse: {:.3f}'.format(eval_result['rmse']))
 
         return eval_result

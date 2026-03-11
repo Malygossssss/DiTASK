@@ -12,6 +12,7 @@ from evaluation.eval_sal_no_beta import SaliencyMeterWithNoBeta
 from evaluation.eval_sal_beta import SaliencyMeterWithBeta
 
 import evaluation.jaccard as evaluation
+from logger import get_eval_logger
 
 
 class SaliencyMeter(object):
@@ -39,9 +40,10 @@ class SaliencyMeter(object):
         }
 
         if verbose:
-            print('\nResults for Saliency Estimation')
-            print('Beta maxF: {:.3f}'.format(100.0 * with_beta_result['maxF']))
-            print('maxF: {:.3f}'.format(100.0 * no_beta_result['maxF']))
-            print('mIoU: {:.3f}'.format(100.0 * no_beta_result['mIoU']))
+            eval_logger = get_eval_logger()
+            eval_logger.info('\nResults for Saliency Estimation')
+            eval_logger.info('Beta maxF: {:.3f}'.format(100.0 * with_beta_result['maxF']))
+            eval_logger.info('maxF: {:.3f}'.format(100.0 * no_beta_result['maxF']))
+            eval_logger.info('mIoU: {:.3f}'.format(100.0 * no_beta_result['mIoU']))
 
         return eval_result
