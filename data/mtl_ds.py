@@ -21,7 +21,6 @@ import json
 
 from utils import mkdir_if_missing
 from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 from collections.abc import Mapping, Sequence
 from torchvision import transforms
 from easydict import EasyDict as edict
@@ -226,7 +225,9 @@ class NYUD_MT(data.Dataset):
         return _semseg
 
     def _load_depth(self, index):
-        _depth = np.load(self.depths[index])
+        _depth = np.load(self.depths[index]).astype(np.float32)
+        # NYUD depth files are in millimeters; convert to meters for a better-scaled regression target.
+        _depth = _depth / 1000.0
         return _depth
 
     def _load_normals(self, index):
@@ -869,8 +870,7 @@ def get_transformations(db_name, config):
 
 def get_mtl_train_dataloader(config, dataset):
     """ Return the train dataloader """
-    sampler = DistributedSampler(dataset)
-    trainloader = DataLoader(dataset, batch_size=config.DATA.BATCH_SIZE, shuffle=False, sampler=sampler, drop_last=True,
+    trainloader = DataLoader(dataset, batch_size=config.DATA.BATCH_SIZE, shuffle=True, drop_last=True,
                              num_workers=config.DATA.NUM_WORKERS, collate_fn=collate_mil, pin_memory=config.DATA.PIN_MEMORY)
     return trainloader
 
@@ -904,7 +904,6 @@ def get_mtl_val_dataset(db_name, config, transforms):
 
 def get_mtl_val_dataloader(config, dataset):
     """ Return the validation dataloader """
-    sampler = DistributedSampler(dataset)
-    testloader = DataLoader(dataset, batch_size=config.DATA.BATCH_SIZE, shuffle=False, sampler=sampler, drop_last=False,
+    testloader = DataLoader(dataset, batch_size=config.DATA.BATCH_SIZE, shuffle=False, drop_last=False,
                             num_workers=config.DATA.NUM_WORKERS, pin_memory=config.DATA.PIN_MEMORY)
     return testloader

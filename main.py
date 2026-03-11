@@ -11,6 +11,7 @@ import json
 import random
 import argparse
 import datetime
+import shutil
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -32,6 +33,7 @@ from utils import load_checkpoint, load_pretrained, save_checkpoint, NativeScale
 
 from mtl_loss_schemes import MultiTaskLoss, get_loss
 from evaluation.evaluate_utils import PerformanceMeter, get_output
+from evaluation.eval_edge import eval_edge_predictions
 from ptflops import get_model_complexity_info
 from models.lora import mark_only_lora_as_trainable
 
@@ -289,7 +291,7 @@ Total params without LoRA:  {total_model_params_without_lora:,} (trainable ratio
     # print(model)
     # exit(0)
     for epoch in range(config.TRAIN.EPOCHS):
-        if config.MTL:
+        if not config.MTL:
             data_loader_train.sampler.set_epoch(epoch)
 
         train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler,
@@ -309,6 +311,34 @@ Total params without LoRA:  {total_model_params_without_lora:,} (trainable ratio
     total_time = time.perf_counter() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     logger.info('Training time {}'.format(total_time_str))
+
+
+def _get_dist_rank():
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank()
+    return 0
+
+
+def _prepare_edge_eval_cache(output_dir, epoch):
+    cache_dir = os.path.join(output_dir, "__edge_eval_cache__", f"epoch_{int(epoch):04d}")
+    if os.path.isdir(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(os.path.join(cache_dir, "edge"), exist_ok=True)
+    return cache_dir
+
+
+def _save_edge_predictions(cache_dir, image_ids, edge_logits):
+    edge_probs = torch.sigmoid(edge_logits.detach()).float().cpu().numpy()
+    if isinstance(image_ids, str):
+        image_ids = [image_ids]
+    else:
+        image_ids = list(image_ids)
+
+    for index, image_id in enumerate(image_ids):
+        np.save(
+            os.path.join(cache_dir, "edge", f"{image_id}.npy"),
+            edge_probs[index, 0].astype(np.float32),
+        )
 
 
 def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, loss_scaler, task=None, teacher=None):
@@ -426,7 +456,7 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 scores_logs["train/tasks/sal/Beta maxF"] = scores['sal']['Beta maxF']
                 scores_logs["train/tasks/sal/mIoU"] = scores['sal']['mIoU']
             if 'edge' in loss_dict:
-                scores_logs["train/tasks/sal/loss"] = scores['edge']['loss']
+                scores_logs["train/tasks/edge/loss"] = scores['edge']['loss']
             if 'depth' in loss_dict:
                 scores_logs["train/tasks/depth/rmse"] = scores['depth']['rmse']
                 scores_logs["train/tasks/depth/log_rmse"] = scores['depth']['log_rmse']
@@ -441,11 +471,18 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
 
 @torch.no_grad()
 def validate(config, data_loader, model, epoch):
-    """ Evaluate model in an online fashion without storing the predictions to disk """
+    """Evaluate the model online and save temporary edge predictions when needed."""
     tasks = config.TASKS
     performance_meter = PerformanceMeter(config, config.DATA.DBNAME)
     loss_meter = AverageMeter()
-    rank = int(os.environ['LOCAL_RANK'])
+    local_rank = int(os.environ['LOCAL_RANK'])
+    rank = _get_dist_rank()
+    edge_eval_dir = None
+    should_run_formal_edge_eval = (
+        "edge" in tasks and config.DATA.DBNAME == "NYUD" and rank == 0
+    )
+    if should_run_formal_edge_eval:
+        edge_eval_dir = _prepare_edge_eval_cache(config.OUTPUT, epoch)
 
     loss_ft = torch.nn.ModuleDict(
         {task: get_loss(config['TASKS_CONFIG'], task, config) for task in config.TASKS})
@@ -461,7 +498,6 @@ def validate(config, data_loader, model, epoch):
     for t in config.TASKS:
         loss_weights[t] = all_loss_weights[t]
     criterion = MultiTaskLoss(config.TASKS, loss_ft, loss_weights)
-    data_loader.sampler.set_epoch(epoch)
     model.eval()
     num_val_points = 0
     logger.info("Start eval")
@@ -470,8 +506,8 @@ def validate(config, data_loader, model, epoch):
     for i, batch in enumerate(data_loader):
         # Forward pass
         logger.debug(f"Image ID = {batch['meta']['image']}")
-        images = batch['image'].to(rank, non_blocking=True)
-        targets = {task: batch[task].to(rank,
+        images = batch['image'].to(local_rank, non_blocking=True)
+        targets = {task: batch[task].to(local_rank,
             non_blocking=True) for task in tasks}
 
         output = model(images)
@@ -486,6 +522,8 @@ def validate(config, data_loader, model, epoch):
         processed_output = {t: get_output(
             output[t], t) for t in tasks}
         performance_meter.update(processed_output, targets)
+        if edge_eval_dir is not None:
+            _save_edge_predictions(edge_eval_dir, batch["meta"]["image"], output["edge"])
         if wandb_available:
             metrics = {
                 "val/epoch_ndx": epoch,
@@ -501,7 +539,20 @@ def validate(config, data_loader, model, epoch):
 
     logger.info(f"val loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t")
 
-    eval_results = performance_meter.get_score(verbose=True)
+    try:
+        if edge_eval_dir is not None:
+            formal_edge_results = eval_edge_predictions(
+                database="NYUD",
+                save_dir=edge_eval_dir,
+                gt_root=config.DATA.DATA_PATH,
+                write_outputs=False,
+            )
+            performance_meter.meters["edge"].set_formal_results(formal_edge_results)
+
+        eval_results = performance_meter.get_score(verbose=True)
+    finally:
+        if edge_eval_dir is not None and os.path.isdir(edge_eval_dir):
+            shutil.rmtree(edge_eval_dir, ignore_errors=True)
     epoch_time = time.perf_counter() - start
     logger.info(
         f"eval takes {datetime.timedelta(seconds=int(epoch_time))}")
@@ -523,7 +574,11 @@ def validate(config, data_loader, model, epoch):
             scores_logs["val/tasks/sal/Beta maxF"] = eval_results['sal']['Beta maxF']
             scores_logs["val/tasks/sal/mIoU"] = eval_results['sal']['mIoU']
         if 'edge' in eval_results:
-            scores_logs["val/tasks/sal/loss"] = eval_results['edge']['loss']
+            scores_logs["val/tasks/edge/loss"] = eval_results['edge']['loss']
+            if 'odsF' in eval_results['edge']:
+                scores_logs["val/tasks/edge/odsF"] = eval_results['edge']['odsF']
+                scores_logs["val/tasks/edge/oisF"] = eval_results['edge']['oisF']
+                scores_logs["val/tasks/edge/ap"] = eval_results['edge']['ap']
         if 'depth' in eval_results:
             scores_logs["val/tasks/depth/rmse"] = eval_results['depth']['rmse']
             scores_logs["val/tasks/depth/log_rmse"] = eval_results['depth']['log_rmse']
