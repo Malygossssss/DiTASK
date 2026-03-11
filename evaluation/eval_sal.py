@@ -8,11 +8,13 @@
 
 import numpy as np
 import torch
+import logging
 from evaluation.eval_sal_no_beta import SaliencyMeterWithNoBeta
 from evaluation.eval_sal_beta import SaliencyMeterWithBeta
 
 import evaluation.jaccard as evaluation
-from logger import get_eval_logger
+
+eval_logger = logging.getLogger('eval')
 
 
 class SaliencyMeter(object):
@@ -40,7 +42,6 @@ class SaliencyMeter(object):
         }
 
         if verbose:
-            eval_logger = get_eval_logger()
             eval_logger.info('\nResults for Saliency Estimation')
             eval_logger.info('Beta maxF: {:.3f}'.format(100.0 * with_beta_result['maxF']))
             eval_logger.info('maxF: {:.3f}'.format(100.0 * no_beta_result['maxF']))

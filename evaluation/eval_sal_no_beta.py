@@ -14,9 +14,11 @@ import glob
 import json
 import torch
 from PIL import Image
+import logging
 
 import evaluation.jaccard as evaluation
-from logger import get_eval_logger
+
+eval_logger = logging.getLogger('eval')
 
 
 class SaliencyMeterWithNoBeta(object):
@@ -78,7 +80,6 @@ class SaliencyMeterWithNoBeta(object):
         eval_result = {x: eval_result[x].tolist() for x in eval_result}
 
         if verbose:
-            eval_logger = get_eval_logger()
             eval_logger.info('Results for Saliency Estimation')
             eval_logger.info('mIoU: {0:.3f}'.format(100.0 * eval_result['mIoU']))
             eval_logger.info('maxF: {0:.3f}'.format(100.0 * eval_result['maxF']))

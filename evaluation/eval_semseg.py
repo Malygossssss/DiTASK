@@ -14,8 +14,9 @@ import json
 import numpy as np
 import torch
 from PIL import Image
+import logging
 
-from logger import get_eval_logger
+eval_logger = logging.getLogger('eval')
 
 VOC_CATEGORY_NAMES = ['background',
                       'aeroplane', 'bicycle', 'bird', 'boat', 'bottle',
@@ -35,8 +36,6 @@ NYU_CATEGORY_NAMES = ['wall', 'floor', 'cabinet', 'bed', 'chair',
 
 
 def eval_semseg(loader, folder, n_classes=20, has_bg=True, ignore_index=255):
-    eval_logger = get_eval_logger()
-
     n_classes = n_classes + int(has_bg)
 
     # Iterate
@@ -133,7 +132,6 @@ class SemsegMeter(object):
         eval_result['mIoU'] = np.mean(jac)
 
         if verbose:
-            eval_logger = get_eval_logger()
             eval_logger.info('\nSemantic Segmentation mIoU: {0:.4f}\n'.format(
                 100 * eval_result['mIoU']))
             class_IoU = eval_result['jaccards_all_categs']
@@ -149,8 +147,6 @@ class SemsegMeter(object):
 
 def eval_semseg_predictions(database, save_dir, gt_root=None, overfit=False):
     """ Evaluate the segmentation maps that are stored in the save dir """
-    eval_logger = get_eval_logger()
-
     # Dataloaders
     if database == 'PASCALContext':
         from data.mtl_ds import PASCALContext

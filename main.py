@@ -28,7 +28,7 @@ from models import build_model, build_mtl_model
 from data import build_loader
 from lr_scheduler import build_scheduler
 from optimizer import build_optimizer
-from logger import bind_eval_logger, create_logger
+from logger import create_logger
 from utils import load_checkpoint, load_pretrained, save_checkpoint, NativeScalerWithGradNormCount, auto_resume_helper
 
 from mtl_loss_schemes import MultiTaskLoss, get_loss
@@ -433,7 +433,7 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 f'mem {memory_used:.0f}MB')
 
     if config.EVAL_TRAINING is not None and (epoch % config.EVAL_TRAINING == 0):
-        logger.info("Training Eval:")
+        print("Training Eval:")
         performance_meter.update(
             {t: get_output(outputs[t], t) for t in config.TASKS}, targets)
 
@@ -661,7 +661,8 @@ if __name__ == '__main__':
     os.makedirs(output_dir, exist_ok=True)
     logger = create_logger(output_dir=output_dir,
                            dist_rank=dist.get_rank(), name=f"{config.MODEL.NAME}")
-    bind_eval_logger(logger)
+    eval_logger = create_logger(output_dir=output_dir,
+                                dist_rank=dist.get_rank(), name="eval")
 
     if dist.get_rank() == 0:
         path = os.path.join(output_dir, "config.json")

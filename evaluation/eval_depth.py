@@ -14,13 +14,12 @@ import glob
 import torch
 import json
 import scipy.io as sio
+import logging
 
-from logger import get_eval_logger
+eval_logger = logging.getLogger('eval')
 
 
 def eval_depth(loader, folder):
-    eval_logger = get_eval_logger()
-
     total_rmses = 0.0
     total_log_rmses = 0.0
     n_valid = 0.0
@@ -94,7 +93,6 @@ class DepthMeter(object):
         eval_result['log_rmse'] = np.sqrt(self.total_log_rmses / self.n_valid)
 
         if verbose:
-            eval_logger = get_eval_logger()
             eval_logger.info('Results for depth prediction')
             for x in eval_result:
                 spaces = ''
@@ -106,8 +104,6 @@ class DepthMeter(object):
 
 
 def eval_depth_predictions(database, save_dir, gt_root=None, overfit=False):
-    eval_logger = get_eval_logger()
-
     # Dataloaders
     if database == 'NYUD':
         from data.mtl_ds import NYUD_MT

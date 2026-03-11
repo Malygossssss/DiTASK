@@ -9,8 +9,9 @@
 import numpy as np
 import math
 import torch
+import logging
 
-from logger import get_eval_logger
+eval_logger = logging.getLogger('eval')
 
 
 def normal_ize(arr):
@@ -64,7 +65,6 @@ class NormalsMeterV1(object):
         eval_result['30'] = self.eval_dict['30'] / self.eval_dict['n']
 
         if verbose:
-            eval_logger = get_eval_logger()
             eval_logger.info('Results for Surface Normal Estimation')
             for x in eval_result:
                 spaces = ""

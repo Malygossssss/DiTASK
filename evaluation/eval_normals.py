@@ -1,8 +1,10 @@
+import logging
 import torch
 
 from evaluation.eval_normals_v1 import NormalsMeterV1
 from evaluation.eval_normals_v2 import NormalsMeterV2
-from logger import get_eval_logger
+
+eval_logger = logging.getLogger('eval')
 
 
 class NormalsMeter(object):
@@ -30,7 +32,6 @@ class NormalsMeter(object):
         }
 
         if verbose:
-            eval_logger = get_eval_logger()
             eval_logger.info('\nResults for Surface Normal Estimation')
             eval_logger.info('mean: {:.4f}'.format(eval_v1['mean']))
             eval_logger.info('rmse: {:.4f}'.format(eval_v1['rmse']))
