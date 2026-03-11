@@ -148,3 +148,4 @@ wandb/*
 /output
 /PASCAL_MT
 /backbone
+/NYUv2_MT
