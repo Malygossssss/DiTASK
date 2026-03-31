@@ -1,0 +1,235 @@
+import argparse
+import json
+import os
+import random
+
+import numpy as np
+import torch
+import torch.backends.cudnn as cudnn
+
+from config import get_config
+from logger import create_logger
+from models import build_model, build_mtl_model
+from utils import load_checkpoint
+
+
+BYTES_PER_MB = 1024.0 * 1024.0
+
+
+def parse_option():
+    parser = argparse.ArgumentParser("DiTASK parameter summary", add_help=False)
+    parser.add_argument("--cfg", type=str, required=True, metavar="FILE", help="path to config file")
+    parser.add_argument("--checkpoint", "--resume", dest="checkpoint", required=True, help="checkpoint to inspect")
+    parser.add_argument("--opts", default=None, nargs="+", help="Modify config options by adding KEY VALUE pairs.")
+    parser.add_argument("--output", default="output", type=str, metavar="PATH", help="root output folder")
+    parser.add_argument("--output-dir", type=str, help="explicit directory to save summary artifacts")
+    parser.add_argument("--data-path", type=str, help="dataset path")
+    parser.add_argument("--disable_amp", action="store_true", help="disable pytorch amp")
+    parser.add_argument("--seed", type=int, help="random seed")
+    parser.add_argument("--deterministic", action="store_true", help="enable deterministic mode")
+    parser.add_argument("--name", type=str, help="override model name")
+    parser.add_argument("--tag", help="experiment tag")
+    parser.add_argument("--tasks", type=str, default="depth", help="comma separated tasks")
+    parser.add_argument("--nyud", type=str, help="NYUD dataset path")
+    parser.add_argument("--pascal", type=str, help="PASCAL dataset path")
+    parser.add_argument("--local_rank", "--local-rank", dest="local_rank", type=int, default=0, help="local rank")
+    parser.add_argument(
+        "--list-parameters",
+        action="store_true",
+        help="include every named parameter in the JSON and console output",
+    )
+    args = parser.parse_args()
+    args.resume = args.checkpoint
+    config = get_config(args)
+    return args, config
+
+
+def set_random_seed(seed, deterministic):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    if deterministic:
+        cudnn.benchmark = False
+        cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    else:
+        cudnn.benchmark = True
+
+
+def get_output_dir(args):
+    if args.output_dir:
+        return os.path.abspath(args.output_dir)
+    checkpoint_dir = os.path.dirname(os.path.abspath(args.checkpoint))
+    return os.path.join(checkpoint_dir, "standalone_parameter_summary")
+
+
+def build_model_for_summary(config, device):
+    backbone = build_model(config)
+    model = build_mtl_model(backbone, config) if config.MTL else backbone
+    model.to(device)
+    return model
+
+
+def load_model_for_summary(config, checkpoint_path, device, logger):
+    model = build_model_for_summary(config, device)
+    load_config = config.clone()
+    load_config.defrost()
+    load_config.MODEL.RESUME = checkpoint_path
+    load_config.EVAL_MODE = True
+    load_config.freeze()
+    load_checkpoint(load_config, model, None, None, None, logger)
+    return model
+
+
+def get_top_level_name(parameter_name):
+    if "." not in parameter_name:
+        return parameter_name
+    return parameter_name.split(".", 1)[0]
+
+
+def tensor_num_bytes(tensor):
+    return int(tensor.numel() * tensor.element_size())
+
+
+def summarize_named_parameters(model, include_parameter_details=False):
+    total_params = 0
+    trainable_params = 0
+    total_param_bytes = 0
+    by_module = {}
+    parameter_details = []
+
+    for name, param in model.named_parameters():
+        numel = int(param.numel())
+        num_bytes = tensor_num_bytes(param)
+        top_level_name = get_top_level_name(name)
+
+        total_params += numel
+        total_param_bytes += num_bytes
+        if param.requires_grad:
+            trainable_params += numel
+
+        module_summary = by_module.setdefault(
+            top_level_name,
+            {
+                "parameter_count": 0,
+                "trainable_parameter_count": 0,
+                "parameter_bytes": 0,
+            },
+        )
+        module_summary["parameter_count"] += numel
+        module_summary["parameter_bytes"] += num_bytes
+        if param.requires_grad:
+            module_summary["trainable_parameter_count"] += numel
+
+        if include_parameter_details:
+            parameter_details.append(
+                {
+                    "name": name,
+                    "shape": list(param.shape),
+                    "dtype": str(param.dtype),
+                    "requires_grad": bool(param.requires_grad),
+                    "parameter_count": numel,
+                    "parameter_mb": float(num_bytes / BYTES_PER_MB),
+                }
+            )
+
+    module_entries = []
+    for module_name, module_summary in sorted(
+        by_module.items(), key=lambda item: item[1]["parameter_count"], reverse=True
+    ):
+        module_entries.append(
+            {
+                "name": module_name,
+                "parameter_count": int(module_summary["parameter_count"]),
+                "trainable_parameter_count": int(module_summary["trainable_parameter_count"]),
+                "parameter_mb": float(module_summary["parameter_bytes"] / BYTES_PER_MB),
+            }
+        )
+
+    return {
+        "total_parameter_count": int(total_params),
+        "trainable_parameter_count": int(trainable_params),
+        "parameter_mb": float(total_param_bytes / BYTES_PER_MB),
+        "module_parameter_summary": module_entries,
+        "parameter_details": parameter_details if include_parameter_details else None,
+    }
+
+
+def summarize_named_buffers(model):
+    total_buffer_tensors = 0
+    total_buffer_elements = 0
+    total_buffer_bytes = 0
+
+    for _, buffer in model.named_buffers():
+        total_buffer_tensors += 1
+        total_buffer_elements += int(buffer.numel())
+        total_buffer_bytes += tensor_num_bytes(buffer)
+
+    return {
+        "total_buffer_tensor_count": int(total_buffer_tensors),
+        "total_buffer_element_count": int(total_buffer_elements),
+        "buffer_mb": float(total_buffer_bytes / BYTES_PER_MB),
+    }
+
+
+def build_summary_payload(args, config, model, include_parameter_details=False):
+    payload = {
+        "checkpoint": os.path.abspath(args.checkpoint),
+        "model_name": config.MODEL.NAME,
+        "tasks": list(config.TASKS),
+    }
+    payload.update(summarize_named_parameters(model, include_parameter_details=include_parameter_details))
+    payload.update(summarize_named_buffers(model))
+    return payload
+
+
+def save_json(path, payload):
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+
+
+def print_summary(payload, include_parameter_details=False):
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    if not include_parameter_details:
+        return
+    details = payload.get("parameter_details") or []
+    if not details:
+        return
+    print("\nParameter details:")
+    for entry in details:
+        print(
+            f"{entry['name']}: shape={tuple(entry['shape'])}, dtype={entry['dtype']}, "
+            f"params={entry['parameter_count']}, mb={entry['parameter_mb']:.4f}, "
+            f"requires_grad={entry['requires_grad']}"
+        )
+
+
+def main():
+    args, config = parse_option()
+    seed = int(args.seed if args.seed is not None else config.SEED)
+    set_random_seed(seed, bool(args.deterministic))
+
+    output_dir = get_output_dir(args)
+    os.makedirs(output_dir, exist_ok=True)
+    logger = create_logger(output_dir=output_dir, dist_rank=0, name="parameter_summary")
+    with open(os.path.join(output_dir, "config.json"), "w", encoding="utf-8") as handle:
+        handle.write(config.dump())
+
+    device = torch.device("cpu")
+    model = load_model_for_summary(config, args.checkpoint, device, logger)
+    payload = build_summary_payload(
+        args,
+        config,
+        model,
+        include_parameter_details=bool(args.list_parameters),
+    )
+    save_json(os.path.join(output_dir, "parameter_summary.json"), payload)
+    print_summary(payload, include_parameter_details=bool(args.list_parameters))
+
+
+if __name__ == "__main__":
+    main()
