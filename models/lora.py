@@ -41,6 +41,7 @@ The goal of this approach is to move weight updates into a separate matrix which
 two matrices of a lower rank.
 """
 
+import contextlib
 import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Type, Union, Mapping
@@ -179,12 +180,20 @@ class DiTASKLinear(LoRALayer):
             in_features, out_features, **kwargs)
 
         self.tasks = tasks
+        self._shared_tess_size = int(r["shared"])
+        self._task_tess_sizes = {task: int(r[task]) for task in tasks} if has_tasks else {}
+        self._cpab_cache = {}
+        self._task_cpab_cache = {task: {} for task in tasks} if has_tasks else {}
         if r['shared'] > 0:
+            self.T = self._build_cpab(self._shared_tess_size, torch.device("cpu"))
+            self._cpab_cache[str(torch.device("cpu"))] = self.T
             if has_tasks:
                 self.cpab_tasks = {
-                    task: difw.Cpab(tess_size=r[task], backend='pytorch', device='gpu', zero_boundary=True)
+                    task: self._build_cpab(self._task_tess_sizes[task], torch.device("cpu"))
                     for task in tasks
                 }
+                for task, cpab in self.cpab_tasks.items():
+                    self._task_cpab_cache[task][str(torch.device("cpu"))] = cpab
                 self.lora_tasks_A = nn.ParameterDict({
                     task: nn.Parameter(torch.zeros_like(self.cpab_tasks[task].sample_transformation(1)), requires_grad=True)
                     for task in tasks
@@ -199,10 +208,35 @@ class DiTASKLinear(LoRALayer):
                     self.lora_task_scale = {task: lora_task_scale[task]
                                             for task in tasks}
 
-            self.T = difw.Cpab(tess_size=r['shared'], backend='pytorch', device='gpu' ,zero_boundary=True)
             self.lora_shared_A = nn.Parameter(torch.zeros_like(self.T.sample_transformation(1)), requires_grad=True)
 
             self.reset_parameters()
+
+    def _build_cpab(self, tess_size: int, device: torch.device):
+        backend_device = "gpu" if device.type == "cuda" else "cpu"
+        if device.type == "cuda":
+            with torch.cuda.device(device):
+                return difw.Cpab(tess_size=tess_size, backend="pytorch", device=backend_device, zero_boundary=True)
+        return difw.Cpab(tess_size=tess_size, backend="pytorch", device=backend_device, zero_boundary=True)
+
+    def _get_shared_cpab(self, device: torch.device):
+        key = str(device)
+        cpab = self._cpab_cache.get(key)
+        if cpab is None:
+            cpab = self._build_cpab(self._shared_tess_size, device)
+            self._cpab_cache[key] = cpab
+        self.T = cpab
+        return cpab
+
+    def _get_task_cpab(self, task: str, device: torch.device):
+        cache = self._task_cpab_cache[task]
+        key = str(device)
+        cpab = cache.get(key)
+        if cpab is None:
+            cpab = self._build_cpab(self._task_tess_sizes[task], device)
+            cache[key] = cpab
+        self.cpab_tasks[task] = cpab
+        return cpab
 
     def reset_parameters(self):
         """Reset all the weights, even including pretrained ones."""
@@ -219,7 +253,8 @@ class DiTASKLinear(LoRALayer):
     
     def transform_data(self, T, w, theta):
         U, S, V = torch.svd(w)
-        with torch.autocast("cuda", dtype=torch.float32, enabled=True):
+        autocast_context = torch.autocast("cuda", enabled=False) if w.is_cuda else contextlib.nullcontext()
+        with autocast_context:
             S_t = T.transform_data(S.view(1, -1, 1), theta, outsize=S.shape[0]).view(-1)
         w_deformed = U @ torch.diag_embed(S_t) @ V.T
         return w_deformed
@@ -230,26 +265,27 @@ class DiTASKLinear(LoRALayer):
             return pretrained, None
         x = self.lora_dropout(x)
         w = self.linear.weight
+        shared_cpab = self._get_shared_cpab(w.device)
         do, di = w.shape
         if do == 2 * di:
             wk, wv = torch.tensor_split(w, 2)
-            wk_deformed = self.transform_data(self.T, wk, self.lora_shared_A)
-            wv_deformed = self.transform_data(self.T, wv, self.lora_shared_A)
+            wk_deformed = self.transform_data(shared_cpab, wk, self.lora_shared_A)
+            wv_deformed = self.transform_data(shared_cpab, wv, self.lora_shared_A)
             w_deformed = torch.cat([wk_deformed, wv_deformed], dim=0)
         elif do == 3 * di:
             wq, wk, wv = torch.tensor_split(w, 3)
-            wq_deformed = self.transform_data(self.T, wq, self.lora_shared_A)
-            wk_deformed = self.transform_data(self.T, wk, self.lora_shared_A)
-            wv_deformed = self.transform_data(self.T, wv, self.lora_shared_A)
+            wq_deformed = self.transform_data(shared_cpab, wq, self.lora_shared_A)
+            wk_deformed = self.transform_data(shared_cpab, wk, self.lora_shared_A)
+            wv_deformed = self.transform_data(shared_cpab, wv, self.lora_shared_A)
             w_deformed = torch.cat([wq_deformed, wk_deformed, wv_deformed], dim=0)
         else:
-            w_deformed = self.transform_data(self.T, w, self.lora_shared_A)
+            w_deformed = self.transform_data(shared_cpab, w, self.lora_shared_A)
         lora = F.linear(x, w_deformed, bias=self.linear.bias)
         if self.tasks is not None:
             lora_tasks = {}
             for task in self.tasks:
                 x_task = x if x_tasks is None else x_tasks[task]
-                T = self.cpab_tasks[task]
+                T = self._get_task_cpab(task, w.device)
                 theta = self.lora_tasks_A[task]
                 if do == 2 * di:
                     wk, wv = torch.tensor_split(w, 2)
